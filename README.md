@@ -5,7 +5,7 @@ This is a CRISPR screen analysis software for that can account for
 *  Multiple FACS sorting bins
 *  Incomplete editing rate
 *  Multiple target variant/bystander edit (under development)  
-  
+
 
 ## Installation 
 ```
