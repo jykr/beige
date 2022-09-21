@@ -14,9 +14,7 @@ Its inference uses SVI (Stochastic Variational Inference) through [Pyro](http://
 
 ## Installation 
 ```
-git clone https://github.com/jykr/beige
-cd beige/
-pip install -e .
+pip install beret-beige
 ```
 This requires pre-existing numpy installation.
 
