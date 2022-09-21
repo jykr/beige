@@ -1,4 +1,3 @@
-import numpy as np
 import setuptools
 
 with open("README.md", "r") as fh:
@@ -6,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
      name='beret-beige',  
-     version='0.0.1',
+     version='0.0.2',
      author="Jayoung Ryu",
      author_email="jayoung_ryu@g.harvard.edu",
      description="Bayesian Effect size Inference with Guide counts and Editing rate",
@@ -14,7 +13,6 @@ setuptools.setup(
      long_description_content_type="text/markdown",
      url="https://github.com/jykr/beige",
      packages=setuptools.find_packages(),
-     include_dirs=np.get_include(),
      scripts=["bin/beige"],
      install_requires=[
         'pyro-ppl',

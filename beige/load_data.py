@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, Dict
+from typing import Dict
 from xmlrpc.client import Boolean
 import torch
 import numpy as np
@@ -11,7 +11,7 @@ from .get_alpha0 import get_fitted_alpha0
 @dataclass
 class NData:
     def __init__(self, adata: ad.AnnData, n_sgRNAs_per_target: int,
-    sorting:Literal["topbot", "bins"], actualize = True, repguide_mask: np.ndarray = None, fit_a0 = False, device:str = None, sample_mask_column:str = None, uq_column="upper_quantile", lq_column='lower_quantile'):
+    sorting, actualize = True, repguide_mask: np.ndarray = None, fit_a0 = False, device:str = None, sample_mask_column:str = None, uq_column="upper_quantile", lq_column='lower_quantile'):
         """
         Initialize the NData for normal model from ReporterScreen object.
 
@@ -344,7 +344,7 @@ class MData(NData):
     '''
 
     def __init__(self, adata, n_sgRNAs_per_target,
-    sorting:Literal["topbot", "bins"], plasmid_counts: np.ndarray, allele_df_key = 'aa_allele_counts'):
+    sorting, plasmid_counts: np.ndarray, allele_df_key = 'aa_allele_counts'):
         super().__init__(adata, n_sgRNAs_per_target, sorting, set_variant=False)
         guide_to_allele, reindexed_df = self.reindex_allele_df(adata.uns[allele_df_key])
         self.n_max_alleles = reindexed_df.index.get_level_values('allele_id_for_guide').max() + 1 # include no edit allele
