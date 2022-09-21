@@ -6,9 +6,11 @@ This is a generative-model-based CRISPR screen analysis software for that can ac
 *  :waning_gibbous_moon: Incomplete editing rate
 *  :mag: Multiple target variant/bystander edit (under development)  
 
-BEIGE models the cellular phenotype of CRISPR sorting screen data as mixture distribution. Its inference uses SVI (Stochastic Variational Inference) through [Pyro](http://pyro.ai/) to fit the effect size of perturbing the target element.
+BEIGE models the cellular phenotype of CRISPR sorting screen data as mixture distribution. The cells will be sorted based on the theoretical quantile based on (unperturbed) control distribution and your FACS sorting quantiles. The sorted samples (red box in below schematic) are sequenced to produce the final guide counts.
 
-<img src="graphics/model_design.png" alt="model_design" width="500"/>
+<img src="graphics/model_design.svg" alt="model_design" width="500"/>
+
+Its inference uses SVI (Stochastic Variational Inference) through [Pyro](http://pyro.ai/) to fit the posterior phenotype distribution of target element perturbation. 
 
 ## Installation 
 ```
