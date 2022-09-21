@@ -25,7 +25,6 @@ setuptools.setup(
     #package_data={'': ['beret/annotate/ldlr_exons.fa']},
      classifiers=[
          "Programming Language :: Python :: 3",
-         "License :: OSI Approved :: MIT License",
          "Operating System :: OS Independent",
      ],
  )
