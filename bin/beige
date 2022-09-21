@@ -25,7 +25,7 @@ def get_sd_quantile(quantiles):
     return (quantiles[83]-quantiles[15])/2
 
 
-def run_inference(model, data_list,
+def run_inference(model, data,
                   init_scale=0.01,
                   initial_lr=0.01,
                   gamma=0.1,
@@ -41,9 +41,7 @@ def run_inference(model, data_list,
     #mus, mu_sds, sds, losses = [], [], [], []
     losses = []
     for t in tqdm(range(num_steps)):
-        loss = 0
-        for data in data_list:
-            loss += svi.step(data)
+        loss = svi.step(data)
         if t % 100 == 0:
             print("loss {} @ iter {}".format(loss, t))
         losses.append(loss)
@@ -79,40 +77,19 @@ def main(args):
     bdata = be.read_h5ad(args.bdata_path)
     print("Done loading data. Preprocessing...")
 
-    bdata_fullsort = bdata[:, bdata.condit.sorting_scheme == "sort"]
-    bdata_topbot = bdata[:, bdata.condit.sorting_scheme == "topbot"]
-    ndatas = []
     bdata.condit['rep'] = bdata.condit['rep'].astype('category')
     total_reps = bdata.condit['rep'].unique()
     device = None
-    if args.mcmc:
-        device = 'cuda:0'
-
-    if bdata_topbot.shape[1] != 0:
-        ndata_topbot = beige.load_data.NData(
-            bdata_topbot, 5, "topbot",
+    if bdata.shape[1] != 0:
+        ndata = beige.load_data.NData(
+            bdata, 5, "topbot",
             device=device,
             sample_mask_column=args.sample_mask_column,
-            fit_a0=True)
-        if args.mcmc:
-            print(ndata_topbot.X.get_device())
-        ndata_topbot.rep_index = np.where(
-            total_reps.isin(bdata_topbot.condit['rep'].unique()))[0]
-        ndatas.append(ndata_topbot)
-
-    if bdata_fullsort.shape[1] != 0:
-        ndata_fullsort = load_data.NData(
-            bdata_fullsort, 5, "bins",
-            device=device,
-            sample_mask_column=args.sample_mask_column,
-            fit_a0=True)
-        if args.mcmc:
-            print(ndata_fullsort.X.get_device())  # would throw error if on cpu
-        ndata_fullsort.rep_index = np.where(
-            total_reps.isin(bdata_fullsort.condit['rep'].unique()))[0]
-        ndatas.append(ndata_fullsort)
-    for ndata in ndatas:
-        ndata.n_total_reps = len(total_reps)
+            fit_a0=True,
+            uq_column=args.sorting_bin_upper_quantile_column,
+            lq_column=args.sorting_bin_lower_quantile_column)
+        ndata.rep_index = np.where(
+            total_reps.isin(bdata.condit['rep'].unique()))[0]
 
     model_dict = {
         "A": lambda data: m.NormalModel(data, use_bcmatch = False),
@@ -120,10 +97,11 @@ def main(args):
         "B": lambda data: m.MixtureNormal(data, alpha_prior=10, use_bcmatch = False),
         "B2": lambda data: m.MixtureNormalRepPi(data, alpha_prior=10, use_bcmatch = False),
     }
+
     model = model_dict[args.model_id]
 
     print("Running inference for model {}...".format(args.model_id))
-    param_history_dict = run_inference(model, ndatas)
+    param_history_dict = run_inference(model, ndata)
     outfile_path = "{}.model{}.result.pkl".format(args.prefix, args.model_id)
     print("Done running inference. Writing result at {}...".format(outfile_path))
     with open("{}.model{}.result.pkl".format(args.prefix, args.model_id), "wb") as handle:
@@ -135,14 +113,14 @@ def check_args(args):
     if args.perfect_edit:
         if args.fit_pi or args.rep_pi: raise ValueError("Incompatible model specification: can't assume perfect edit and fit the edit rate or replicate scaling factor.")
         if not args.guide_activity_column is None: raise ValueError("Can't use the guide activity column while constraining perfect edit.")
-        args.model_id == "A"
+        args.model_id = "A"
     elif args.fit_pi:
         if args.rep_pi: raise NotImplementedError("Fitting both pi and the replicate scaling factor is not supported.")
-        args.model_id == "B0"
+        args.model_id = "B0"
     elif args.rep_pi:
-        args.model_id == "B2"
+        args.model_id = "B2"
     else:
-        args.model_id == "B"
+        args.model_id = "B"
     return(args)
 
 if __name__ == "__main__":
@@ -156,8 +134,8 @@ if __name__ == "__main__":
     parser.add_argument('--pi-prior-weight', '-w', type=float, default=1.0, help = "Prior weight for editing rate")
     parser.add_argument('--prefix', '-p', default='',
                         help='prefix to save the result')
-    parser.add_argument('--sorting_bin_upper_quantile_column', '-uq', help = "Column name with upper quantile values of each sorting bin in [Reporter]Screen.condit (or AnnData.var)")
-    parser.add_argument('--sorting_bin_lower_quantile_column', '-lq', help = "Column name with lower quantile values of each sorting bin in [Reporter]Screen.condit (or AnnData var)")
+    parser.add_argument('--sorting_bin_upper_quantile_column', '-uq', help = "Column name with upper quantile values of each sorting bin in [Reporter]Screen.condit (or AnnData.var)", default="upper_quantile")
+    parser.add_argument('--sorting_bin_lower_quantile_column', '-lq', help = "Column name with lower quantile values of each sorting bin in [Reporter]Screen.condit (or AnnData var)", default="lower_quantile")
     parser.add_argument(
         "--cuda", action="store_true", default=False, help="run on GPU"
     )

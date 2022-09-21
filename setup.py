@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
      name='beret-beige',  
-     version='0.0.2',
+     version='0.0.6',
      author="Jayoung Ryu",
      author_email="jayoung_ryu@g.harvard.edu",
      description="Bayesian Effect size Inference with Guide counts and Editing rate",
