@@ -1,11 +1,14 @@
-# <img src="beige2.svg" alt="beige" width="150"/>
+# <img src="graphics/beige2.svg" alt="beige" width="150"/>
 **B**ayesian variant **E**ffect **I**nference with **G**uide counts and **E**diting outcome.  
 
-This is a CRISPR screen analysis software for that can account for 
-*  Multiple FACS sorting bins
-*  Incomplete editing rate
-*  Multiple target variant/bystander edit (under development)  
+This is a generative-model-based CRISPR screen analysis software for that can account for   
+*  :bar_chart: Multiple FACS sorting bins
+*  :waning_gibbous_moon: Incomplete editing rate
+*  :mag: Multiple target variant/bystander edit (under development)  
 
+BEIGE models the cellular phenotype of CRISPR sorting screen data as mixture distribution. Its inference uses SVI (Stochastic Variational Inference) through [Pyro](http://pyro.ai/) to fit the effect size of perturbing the target element.
+
+<img src="graphics/model_design.png" alt="model_design" width="500"/>
 
 ## Installation 
 ```
@@ -33,4 +36,5 @@ beige myReporterScreen.h5ad --prefix=my_analysis [--rep-pi]
 `myReporterScreen.h5ad` must be formatted in `ReporterScreen` object in [beret](https://github.com/pinellolab/beret) package.  
 *  `--rep-pi` : If you suspect your biological replicate will have overall different level of editing rates, you can let the model to fit the replicate specific scaling factor of editing rate using this option.
 
-
+## Caveat
+BEIGE assumes the phenotype distribution pre-sort sample is the same as the negative control. Whereas this assumption can be safely considered as true in case of variant screens, this may not hold true if you expect large phenotypical shift for the majority of perturbed elements.
