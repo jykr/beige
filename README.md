@@ -37,4 +37,4 @@ beige myReporterScreen.h5ad --prefix=my_analysis [--rep-pi]
 *  `--rep-pi` : If you suspect your biological replicate will have overall different level of editing rates, you can let the model to fit the replicate specific scaling factor of editing rate using this option.
 
 ## Caveat
-BEIGE assumes the phenotype distribution pre-sort sample is the same as the negative control. Whereas this assumption can be safely considered as true in case of variant screens, this may not hold true if you expect large phenotypical shift for the majority of perturbed elements.
+*  BEIGE assumes the phenotype distribution pre-sort sample is the same as the negative control. Whereas this assumption can be safely considered as true in case of variant screens, this may not hold true if you expect large phenotypical shift for the majority of perturbed elements.
