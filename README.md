@@ -16,7 +16,6 @@ Its inference uses SVI (Stochastic Variational Inference) through [Pyro](http://
 ```
 pip install beret-beige
 ```
-This requires pre-existing numpy installation.
 
 ## Usage
 ### CRISPR screen data without reporter information
