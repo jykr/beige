@@ -1,0 +1,249 @@
+#!/usr/bin/env python
+import sys
+import os
+import numpy as np
+from scipy.stats import norm
+from statsmodels.stats.multitest import fdrcorrection
+from tqdm.auto import tqdm
+import torch
+import pyro
+import pyro.infer
+import pyro.optim
+import torch
+from pyro.infer.autoguide import AutoNormal
+
+import pickle as pkl
+import argparse
+import beige.model as m
+import beige.pp.load_data
+import beret as be
+
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
+pyro.set_rng_seed(101)
+
+def get_sd_quantile(quantiles):
+    # 16-84% quantile is 2 sigma.
+    return (quantiles[83]-quantiles[15])/2
+
+def run_inference(model, data,
+                  init_scale=0.01,
+                  initial_lr=0.01,
+                  gamma=0.1,
+                  num_steps=2000):
+    guide = AutoNormal(model, init_scale=init_scale)
+    lrd = gamma ** (1 / num_steps)
+    svi = pyro.infer.SVI(
+        model=model,
+        guide=guide,
+        optim=pyro.optim.ClippedAdam({"lr": initial_lr, 'lrd': lrd}),
+        loss=pyro.infer.Trace_ELBO())
+
+    #mus, mu_sds, sds, losses = [], [], [], []
+    losses = []
+    for t in tqdm(range(num_steps)):
+        loss = svi.step(data)
+        if t % 100 == 0:
+            print("loss {} @ iter {}".format(loss, t))
+        losses.append(loss)
+        # mus.append(pyro.param("AutoNormal.locs.mu_alleles").clone())
+        # mu_sds.append(pyro.param("AutoNormal.scales.mu_alleles").clone())
+        # sds.append((pyro.param("AutoNormal.scales.sd_alleles").clone()))
+    quantiles=guide.quantiles(torch.arange(0.01, 1, 0.01))
+    mu = quantiles['mu_alleles'][50].detach()[:,0].numpy()
+    mu_sd = get_sd_quantile(quantiles['mu_alleles'].detach())[:,0].numpy()
+    sd = quantiles['sd_alleles'][50].detach()[:,0].numpy()
+
+    param_history_dict = {
+        "loss": losses,
+        "params": pyro.get_param_store(),
+        "quantiles": guide.quantiles(torch.arange(0.01, 1, 0.01)),
+        "mu": mu,
+        "mu_sd": mu_sd,
+        "z_score": mu/mu_sd,
+        "sd": sd
+    }
+    return(param_history_dict)
+
+def run_inference_custom_guide(model, guide, data_list,
+                                 initial_lr=0.01,
+                                 gamma=0.1,
+                                 num_steps=2000,
+                                 autoguide=False):
+    lrd = gamma ** (1 / num_steps)
+    svi = pyro.infer.SVI(
+        model=model,
+        guide=guide,
+        optim=pyro.optim.ClippedAdam({"lr": initial_lr, 'lrd': lrd}),
+        loss=pyro.infer.Trace_ELBO())
+
+    mus, mu_sds, sds, losses = [], [], [], []
+    for t in tqdm(range(num_steps)):
+        loss = 0
+        for data in data_list:
+            loss += svi.step(data)
+        if t % 100 == 0:
+            print("loss {} @ iter {}".format(loss, t))
+        losses.append(loss)
+    param_history_dict = {
+        "loss": losses,
+        "params": pyro.get_param_store(),
+        #"quantiles": guide.quantiles(torch.arange(0.01, 1, 0.01)),
+    }
+    return(param_history_dict)
+
+def get_fdr(mu_z, plot=False):
+    p_dec = mu_z.map(lambda x:norm.cdf(x))
+    p_inc = mu_z.map(lambda x:1-norm.cdf(x))
+    if plot:
+        fig, ax = plt.subplots(1, 2, figsize=(6, 3))
+        ax[0].hist(p_dec)
+        ax[0].set_title("p_dec")
+        ax[1].hist(p_inc)
+        ax[1].set_title("p_inc")
+        plt.show()
+    _, fdr_dec = fdrcorrection(p_dec)
+    _, fdr_inc = fdrcorrection(p_inc)
+    fdr = np.minimum(fdr_dec, fdr_inc)
+    return(fdr_dec, fdr_inc, fdr)
+
+def write_table(param_hist_dict, prefix=""):
+    try:
+        mu = param_hist_dict['quantiles']['mu_alleles'][50].detach()[:,0].numpy()
+        mu_sd = get_sd_quantile(param_hist_dict['quantiles']['mu_alleles'].detach())[:,0].numpy()
+        sd = param_hist_dict['quantiles']['sd_alleles'][50].detach()[:,0].numpy()
+    except:
+        mu = param_hist_dict['params']['mu_loc'].detach()[:,0].numpy()
+        mu_sd = param_hist_dict['params']['mu_scale'].detach()[:,0].numpy()
+        sd = param_hist_dict['params']['sd_loc'].detach().exp()[:,0].numpy()
+    mu_z = mu/mu_sd
+    fdr_dec, fdr_inc, fdr = get_fdr(mu_z)
+    fit_df = pd.DataFrame({
+        "mu": mu,
+        "mu_sd": mu_sd,
+        "mu_z": mu/mu_sd,
+        "sd": sd,
+        "fdr_dec": fdr_dec,
+        "fdr_inc":fdr_inc,
+        "fdr":fdr
+        }
+    )
+    fit_df.to_csv(f"{prefix}CRISPRbean_result.csv")
+
+def main(args):
+    if args.cuda:
+        torch.set_default_tensor_type(torch.cuda.FloatTensor)
+    else:
+        torch.set_default_tensor_type(torch.FloatTensor)
+    if args.prefix == "":
+        args.prefix = "."
+    os.makedirs(args.prefix, exist_ok=True)
+    args.prefix = args.prefix + "/" + \
+        os.path.basename(args.bdata_path).rsplit(".h5ad", 1)[0]
+    bdata = be.read_h5ad(args.bdata_path)
+    print("Done loading data. Preprocessing...")
+    bdata_fullsort = bdata[:, bdata.condit.sorting_scheme == "sort"]
+    bdata_topbot = bdata[:, bdata.condit.sorting_scheme == "topbot"]
+    ndatas = []
+    bdata.condit['rep'] = bdata.condit['rep'].astype('category')
+    total_reps = bdata.condit['rep'].unique()
+    device = None
+    if bdata_topbot.shape[1] != 0:
+        if not args.repguide_mask is None:
+            assert args.repguide_mask in bdata_topbot.uns.keys()
+        ndata_topbot = beige.preprocessing.load_data.NData(
+            bdata_topbot, 5, "topbot", device=device,
+            repguide_mask=args.repguide_mask,
+            sample_mask_column=args.sample_mask_column,
+            fit_a0=~args.raw_alpha,
+            fit_a0_lower_quantile=args.a0_lower_quantile)
+        if args.mcmc:
+            print(ndata_topbot.X.get_device())
+        ndata_topbot.rep_index = np.where(
+            total_reps.isin(bdata_topbot.condit['rep'].unique()))[0]
+        ndatas.append(ndata_topbot)
+
+    if bdata_fullsort.shape[1] != 0:
+        if not args.repguide_mask is None:
+            assert args.repguide_mask in bdata_fullsort.uns.keys()
+        ndata_fullsort = beige.preprocessing.load_data.NData(
+            bdata_fullsort, 5, "bins", device=device,
+            repguide_mask=args.repguide_mask,
+            sample_mask_column=args.sample_mask_column,
+            fit_a0=~args.raw_alpha,
+            fit_a0_lower_quantile=args.a0_lower_quantile)
+        if args.mcmc:
+            print(ndata_fullsort.X.get_device())  # would throw error if on cpu
+        ndata_fullsort.rep_index = np.where(
+            total_reps.isin(bdata_fullsort.condit['rep'].unique()))[0]
+        ndatas.append(ndata_fullsort)
+    for ndata in ndatas:
+        ndata.n_total_reps = len(total_reps)
+    del bdata
+    del bdata_fullsort
+    del bdata_topbot
+    model_dict = {
+        "A": lambda data: m.NormalModel(data, use_bcmatch = False),
+        "B0": lambda data: m.MixtureNormalFittedPi(data, alpha_prior=10, use_bcmatch = False),
+        "B": lambda data: m.MixtureNormal(data, alpha_prior=10, use_bcmatch = False),
+        "B2": lambda data: m.MixtureNormalRepPi(data, alpha_prior=10, use_bcmatch = False),
+    }
+
+    guide_dict = {
+        "B":m.guide_MixtureNormal, 
+        "B2":m.guide_MixtureNormal,
+    }
+
+    model = model_dict[args.model_id]
+    print("Running inference for model {}...".format(args.model_id))
+    if args.model_id in guide_dict.keys():
+        param_history_dict = run_inference_custom_guide(model, guide_dict[args.model_id], ndatas)
+    else:
+        print(f"No guide specified for model {args.model_id}. Using AutoNormal guide")
+        param_history_dict = run_inference(model, ndatas, run_id = f"{os.path.basename(args.bdata_path)}_{args.model_id}")
+    outfile_path = "{}.model{}.result.pkl".format(args.prefix, args.model_id)
+    print("Done running inference. Writing result at {}...".format(outfile_path))
+    with open("{}.model{}.result.pkl".format(args.prefix, args.model_id), "wb") as handle:
+        pkl.dump(param_history_dict, handle)
+    write_table(param_history_dict, prefix=f"{args.prefix}.model{args.model_id}.")
+    print("Done!")
+
+def check_args(args):
+    # identify model to use
+    if args.perfect_edit:
+        if args.fit_pi or args.rep_pi: raise ValueError("Incompatible model specification: can't assume perfect edit and fit the edit rate or replicate scaling factor.")
+        if not args.guide_activity_column is None: raise ValueError("Can't use the guide activity column while constraining perfect edit.")
+        args.model_id = "A"
+    elif args.fit_pi:
+        if args.rep_pi: raise NotImplementedError("Fitting both pi and the replicate scaling factor is not supported.")
+        args.model_id = "B0"
+    elif args.rep_pi:
+        args.model_id = "B2"
+    else:
+        args.model_id = "B"
+    return(args)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Run model on data.')
+    parser.add_argument('bdata_path', type=str,
+                        help='Path of an ReporterScreen object')
+    parser.add_argument('--fit-pi', '-f', action='store_true', default=False, help='Fit pi (editing rate) of target variant. Observed editing activity is ignored.')
+    parser.add_argument('--rep-pi', '-r', action='store_true', default=False, help = "Fit replicate specific scaling factor. Recommended to set as True if you expect variable editing activity across biological replicates.")
+    parser.add_argument('--perfect-edit', '-c', action='store_true', default=False, help= "Assume perfect editing rate for all guides.")
+    parser.add_argument('--guide_activity_column', '-a', type=str, default=None, help="Column in ReporterScreen.guide DataFrame showing the editing rate estimated via external tools")
+    parser.add_argument('--pi-prior-weight', '-w', type=float, default=1.0, help = "Prior weight for editing rate")
+    parser.add_argument('--prefix', '-p', default='',
+                        help='prefix to save the result')
+    parser.add_argument('--sorting_bin_upper_quantile_column', '-uq', help = "Column name with upper quantile values of each sorting bin in [Reporter]Screen.condit (or AnnData.var)", default="upper_quantile")
+    parser.add_argument('--sorting_bin_lower_quantile_column', '-lq', help = "Column name with lower quantile values of each sorting bin in [Reporter]Screen.condit (or AnnData var)", default="lower_quantile")
+    parser.add_argument(
+        "--cuda", action="store_true", default=False, help="run on GPU"
+    )
+    parser.add_argument(
+        "--sample-mask-column", type=str, default=None, help="Name of the column indicating the sample mask in [Reporter]Screen.condit (or AnnData.var). Sample is ignored if the value in this column is 0. This can be used to mask out low-quality samples."
+    )
+    parser.add_argument(
+        "--fit_negctrl", action="store_true", default=False, help="Fit the shared negative control distribution to normalize the fitted parameters"
+    )
+    args = parser.parse_args()
+    args = check_args(args)
+    main(args)
