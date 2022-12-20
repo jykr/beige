@@ -4,44 +4,7 @@ import pyro
 from pyro import poutine
 import pyro.distributions as dist
 import torch.distributions.constraints as constraints
-
-
-def get_alpha(expected_guide_p, size_factor, sample_mask, a0, epsilon=1e-10):
-    p = expected_guide_p.permute(
-                0, 2, 1) * size_factor[:, None, :]  #(n_reps, n_guides, n_bins)
-    a = p/p.sum(axis=-1)[:,:,None]*a0[None,:,None]
-    a=(a * sample_mask[:,None,:]).clamp(min=epsilon)
-    return(a)
-    
-
-def get_std_normal_prob(upper_quantile: torch.Tensor, lower_quantile: torch.Tensor,
-                        mu: torch.Tensor, sd: torch.Tensor,
-                        mask=None) -> torch.Tensor:
-    """
-    Returns the probability that the normal distribution with mu and sd will
-    lie between upper_quantile and lower_quantile of normal distribution
-    centered at 0 and has scale sd.
-    Arguments
-    - mask: ignore index if 0 (=False).
-    """
-    inf_mask = upper_quantile == 1.0
-    ninf_mask = lower_quantile == 0.0
-
-    upper_thres = tdist.Normal(0, 1).icdf(upper_quantile)
-    lower_thres = tdist.Normal(0, 1).icdf(lower_quantile)
-    
-    if not mask is None:
-        sd = sd + (~mask).long()
-    cdf_upper = tdist.Normal(mu, sd).cdf(upper_thres)
-    cdf_lower = tdist.Normal(mu, sd).cdf(lower_thres)
-
-    res = cdf_upper - cdf_lower
-    res[inf_mask] = (1 - cdf_lower)[inf_mask]
-    res[ninf_mask] = cdf_upper[ninf_mask]
-    if not mask is None:
-        res[~mask] = 0
-
-    return(res)    
+from .utils import get_alpha, get_std_normal_prob  
 
 def NormalModel(data, mask_thres = 10, use_bcmatch = True):
     '''
@@ -424,7 +387,65 @@ def MixtureNormalRepPi(data, alpha_prior=1, scale_alpha = True, use_bcmatch = Tr
                                     a_bcmatch*alpha_scaling_factor, validate_args=False),
                                 obs = data.X_bcmatch_masked.permute(0, 2, 1))
 
-    return(alleles_p_bin)
+def guide_MixtureNormalRepPi(data, alpha_prior=1):
+    '''
+    Guide for model B11
+    '''
+    if data.sorting_scheme == "topbot":
+        replicate_plate = pyro.plate("topbot_plate", data.n_reps, dim=-3)
+        replicate_plate2 = pyro.plate("topbot_plate2", data.n_reps, dim=-2)
+        bin_plate = pyro.plate("tb_bin_plate", data.n_bins, dim=-2)
+    else:
+        replicate_plate = pyro.plate("rep_plate", data.n_reps, dim=-3)
+        replicate_plate2 = pyro.plate("rep_plate2", data.n_reps, dim=-2)
+        bin_plate = pyro.plate("bin_plate", data.n_bins, dim=-2)
+    guide_plate = pyro.plate("guide_plate", data.n_guides, dim=-1)
+
+    # Set the prior for phenotype means
+    mu_loc = pyro.param("mu_loc", torch.zeros((data.n_targets, 1)))
+    mu_scale = pyro.param("mu_scale", torch.ones((data.n_targets, 1)), constraint = constraints.positive)
+    sd_loc = pyro.param("sd_loc", torch.zeros((data.n_targets, 1)))
+    sd_scale = pyro.param("sd_scale", torch.ones((data.n_targets, 1)), constraint = constraints.positive)
+    with pyro.plate('guide_plate0', 1):
+        with pyro.plate('guide_plate1', data.n_targets):
+            mu_alleles = pyro.sample('mu_alleles', dist.Normal(mu_loc, mu_scale))
+            sd_alleles = pyro.sample("sd_alleles",  dist.LogNormal(sd_loc, sd_scale))
+    mu_center = torch.cat(
+        [mu_alleles, torch.zeros((data.n_targets, 1))], axis=-1)
+    mu = torch.repeat_interleave(
+        mu_center, data.target_lengths, dim=0)
+    assert mu.shape == (data.n_guides, 2)
+
+    sd = torch.cat([sd_alleles, torch.ones((data.n_targets, 1))], axis=-1)
+    sd = torch.repeat_interleave(sd, data.target_lengths, dim=0)
+    assert sd.shape == (data.n_guides, 2)
+    # The pi should be Dirichlet distributed instead of independent betas
+    alpha_pi = pyro.param("alpha_pi", torch.ones(
+        (data.n_guides, 2,))*alpha_prior, constraint=constraints.positive)
+    assert alpha_pi.shape == (data.n_guides, 2,), alpha_pi.shape
+    replicate_edit_scale = pyro.param("replicate_edit_scale",
+                                    torch.ones(data.n_total_reps,),
+                                    constraint=constraints.positive)
+    if data.sorting_scheme == "topbot":
+        replicate_edit_scale_per_allele = torch.cat(
+            (replicate_edit_scale[:data.n_reps].unsqueeze(-1).expand(-1, 2-1),  # (n_reps, 1)
+            torch.ones((data.n_reps, 1))),
+            axis=-1)
+    else:
+        replicate_edit_scale_per_allele = torch.cat(
+            (replicate_edit_scale[(data.n_total_reps - data.n_reps):].unsqueeze(-1).expand(-1, 2-1),  # (n_reps, 1)
+            torch.ones((data.n_reps, 1))),
+            axis=-1)
+    replicate_alpha_pi = alpha_pi[None, :, :] * \
+        replicate_edit_scale_per_allele[:, None, :]
+    assert replicate_alpha_pi.shape == (data.n_reps, data.n_guides, 2,)
+    pi_a_scaled = replicate_alpha_pi/replicate_alpha_pi.sum(axis=-1)[:,:,None]*data.pi_a0[None,:,None]
+    with replicate_plate:
+        with guide_plate:
+            pi = pyro.sample(
+                "pi", 
+                dist.Dirichlet(pi_a_scaled.unsqueeze(1).clamp(1e-5)))
+            assert pi.shape == (data.n_reps, 1, data.n_guides, 2,), pi.shape
 
 def MulticomponentMixtureNormal(data, alpha_prior=1, scale_alpha = True, use_bcmatch = True):
     '''

@@ -8,7 +8,6 @@ import patsy
 import seaborn as sns
 import matplotlib.pyplot as plt
 import anndata as ad
-from fit_dispersion import get_trend_fitted_dispersion
 import get_alpha0
 import get_pi_alpha0
 
